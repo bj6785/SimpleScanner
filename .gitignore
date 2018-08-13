@@ -1,0 +1,10 @@
+./SimpleScanner/*.iml
+./SimpleScanner/.gradle
+./SimpleScanner/local.properties
+./SimpleScanner/.idea/libraries
+./SimpleScanner/.idea/modules.xml
+./SimpleScanner/.idea/workspace.xml
+./SimpleScanner/.DS_Store
+./SimpleScanner/build
+./SimpleScanner/captures
+./SimpleScanner/.externalNativeBuild

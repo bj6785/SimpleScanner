@@ -10,6 +10,7 @@ import android.support.annotation.NonNull;
 import android.support.v4.content.ContextCompat;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.widget.FrameLayout;
 
 import java.util.ArrayList;
@@ -20,14 +21,12 @@ import java.util.ArrayList;
 public abstract class BarcodeScannerView extends FrameLayout implements Camera.PreviewCallback {
     private static final String TAG = "BarcodeScannerView";
 
-    protected CameraHandlerThread cameraHandlerThread;//当相机被释放时会被置为null
-    protected CameraWrapper cameraWrapper;//当相机被释放时会被置为null
-
-    private IViewFinder viewFinderView;
+    private CameraWrapper cameraWrapper;
     private CameraPreview cameraPreview;
+    private IViewFinder viewFinderView;
     private Rect scaledRect, rotatedRect;
-    private ArrayList<Camera.Area> focusAreas;
-    private boolean shouldAdjustFocusArea = false;//是否需要自动调整对焦区域
+    private CameraHandlerThread cameraHandlerThread;
+    private boolean shouldAdjustFocusArea = false;
 
     public BarcodeScannerView(@NonNull Context context, @NonNull IViewFinder viewFinderView) {
         super(context);
@@ -58,97 +57,114 @@ public abstract class BarcodeScannerView extends FrameLayout implements Camera.P
      */
     public void setupCameraPreview(final CameraWrapper cameraWrapper) {
         this.cameraWrapper = cameraWrapper;
-
         if (this.cameraWrapper != null) {
-            removeAllViews();
-            cameraPreview = new CameraPreview(getContext(), cameraWrapper, this, new CameraPreview.FocusAreaSetter() {
-                @Override
-                public void setAutoFocusArea() {
-                    setupFocusAreas();//设置对焦区域
-                }
-            });
-            addView(cameraPreview);
-            addView(((View) viewFinderView));
-        } else {
-            Log.e(TAG, "相机打开失败");
+            setupLayout(this.cameraWrapper);//创建CameraPreview对象，将CameraPreview和ViewFinderView添加到容器中
+
+            Camera.Parameters parameters = cameraWrapper.camera.getParameters();
+            parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+            cameraWrapper.camera.setParameters(parameters);
+
+            //设置对焦区域
+            if (shouldAdjustFocusArea) {
+                ((View) viewFinderView).getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {//确保能获取到viewFinderView的尺寸
+                    @Override
+                    public boolean onPreDraw() {
+                        ((View) viewFinderView).getViewTreeObserver().removeOnPreDrawListener(this);
+                        setupFocusAreas();
+                        return true;
+                    }
+                });
+            }
         }
+    }
+
+    /**
+     * 创建CameraPreview对象，将CameraPreview和ViewFinderView添加到容器中
+     */
+    private void setupLayout(CameraWrapper cameraWrapper) {
+        removeAllViews();
+
+        cameraPreview = new CameraPreview(getContext(), cameraWrapper, this);
+        addView(cameraPreview);
+        addView(((View) viewFinderView));
     }
 
     /**
      * 设置对焦区域
      */
     private void setupFocusAreas() {
-        if (!shouldAdjustFocusArea) return;
+        /*
+         * 1.根据ViewFinderView和2000*2000的尺寸之比，缩放对焦区域
+         */
+        Rect framingRect = viewFinderView.getFramingRect();//获得扫码框区域
+        int viewFinderViewWidth = ((View) viewFinderView).getWidth();
+        int viewFinderViewHeight = ((View) viewFinderView).getHeight();
+        int width = 2000, height = 2000;
 
-        if (cameraWrapper == null) return;
+        Rect scaledRect = new Rect(framingRect);
+        scaledRect.left = scaledRect.left * width / viewFinderViewWidth;
+        scaledRect.right = scaledRect.right * width / viewFinderViewWidth;
+        scaledRect.top = scaledRect.top * height / viewFinderViewHeight;
+        scaledRect.bottom = scaledRect.bottom * height / viewFinderViewHeight;
 
+        /*
+         * 2.旋转对焦区域
+         */
+        Rect rotatedRect = new Rect(scaledRect);
+        int rotationCount = getRotationCount();
+        if (rotationCount == 1) {//若相机图像需要顺时针旋转90度，则将扫码框逆时针旋转90度
+            rotatedRect.left = scaledRect.top;
+            rotatedRect.top = 2000 - scaledRect.right;
+            rotatedRect.right = scaledRect.bottom;
+            rotatedRect.bottom = 2000 - scaledRect.left;
+        } else if (rotationCount == 2) {//若相机图像需要顺时针旋转180度,则将扫码框逆时针旋转180度
+            rotatedRect.left = 2000 - scaledRect.right;
+            rotatedRect.top = 2000 - scaledRect.bottom;
+            rotatedRect.right = 2000 - scaledRect.left;
+            rotatedRect.bottom = 2000 - scaledRect.top;
+        } else if (rotationCount == 3) {//若相机图像需要顺时针旋转270度，则将扫码框逆时针旋转270度
+            rotatedRect.left = 2000 - scaledRect.bottom;
+            rotatedRect.top = scaledRect.left;
+            rotatedRect.right = 2000 - scaledRect.top;
+            rotatedRect.bottom = scaledRect.right;
+        }
+
+        /*
+         * 3.坐标系平移
+         */
+        Rect rect = new Rect(rotatedRect.left - 1000, rotatedRect.top - 1000, rotatedRect.right - 1000, rotatedRect.bottom - 1000);
+
+        /*
+         * 4.设置对焦区域
+         */
         Camera.Parameters parameters = cameraWrapper.camera.getParameters();
-        if (parameters.getMaxNumFocusAreas() <= 0) {
-            Log.e(TAG, "不支持设置对焦区域");
-            return;
-        }
-
-        if (focusAreas == null) {
-            int width = 2000, height = 2000;
-            Rect framingRect = viewFinderView.getFramingRect();//获得扫码框区域
-            if (framingRect == null) return;
-            int viewFinderViewWidth = ((View) viewFinderView).getWidth();
-            int viewFinderViewHeight = ((View) viewFinderView).getHeight();
-
-            //1.根据ViewFinderView和2000*2000的尺寸之比，缩放对焦区域
-            Rect scaledRect = new Rect(framingRect);
-            scaledRect.left = scaledRect.left * width / viewFinderViewWidth;
-            scaledRect.right = scaledRect.right * width / viewFinderViewWidth;
-            scaledRect.top = scaledRect.top * height / viewFinderViewHeight;
-            scaledRect.bottom = scaledRect.bottom * height / viewFinderViewHeight;
-
-            //2.旋转对焦区域
-            Rect rotatedRect = new Rect(scaledRect);
-            int rotationCount = getRotationCount();
-            if (rotationCount == 1) {//若相机图像需要顺时针旋转90度，则将扫码框逆时针旋转90度
-                rotatedRect.left = scaledRect.top;
-                rotatedRect.top = 2000 - scaledRect.right;
-                rotatedRect.right = scaledRect.bottom;
-                rotatedRect.bottom = 2000 - scaledRect.left;
-            } else if (rotationCount == 2) {//若相机图像需要顺时针旋转180度,则将扫码框逆时针旋转180度
-                rotatedRect.left = 2000 - scaledRect.right;
-                rotatedRect.top = 2000 - scaledRect.bottom;
-                rotatedRect.right = 2000 - scaledRect.left;
-                rotatedRect.bottom = 2000 - scaledRect.top;
-            } else if (rotationCount == 3) {//若相机图像需要顺时针旋转270度，则将扫码框逆时针旋转270度
-                rotatedRect.left = 2000 - scaledRect.bottom;
-                rotatedRect.top = scaledRect.left;
-                rotatedRect.right = 2000 - scaledRect.top;
-                rotatedRect.bottom = scaledRect.right;
-            }
-
-            //3.坐标系平移
-            Rect rect = new Rect(rotatedRect.left - 1000, rotatedRect.top - 1000, rotatedRect.right - 1000, rotatedRect.bottom - 1000);
-
+        if (parameters.getMaxNumFocusAreas() > 0) {
             Camera.Area area = new Camera.Area(rect, 1000);
-            focusAreas = new ArrayList<>();
-            focusAreas.add(area);
+            ArrayList<Camera.Area> areaList = new ArrayList<>();
+            areaList.add(area);
+            parameters.setFocusAreas(areaList);
+            cameraWrapper.camera.setParameters(parameters);
+        } else {
+            Log.e(TAG, "不支持设置对焦区域");
         }
 
-        parameters.setFocusAreas(focusAreas);
-        cameraWrapper.camera.setParameters(parameters);
+        Log.e(TAG, "对焦区域：" + rect.toShortString());
     }
 
     /**
      * 释放相机资源等各种资源
      */
     public void stopCamera() {
-        if (cameraHandlerThread != null) {
-            cameraHandlerThread.quit();
-            cameraHandlerThread = null;
-        }
-
         if (cameraWrapper != null) {
             cameraPreview.stopCameraPreview();//停止相机预览并置空各种回调
             cameraPreview.setCamera(null, null);
-
             cameraWrapper.camera.release();//释放资源
             cameraWrapper = null;
+        }
+        //停止线程
+        if (cameraHandlerThread != null) {
+            cameraHandlerThread.quit();
+            cameraHandlerThread = null;
         }
     }
 
@@ -300,7 +316,7 @@ public abstract class BarcodeScannerView extends FrameLayout implements Camera.P
      * 设置是否要根据扫码框的位置去调整对焦区域的位置<br/>
      * 默认值为false，即不调整，会使用系统默认的配置，那么对焦区域会位于预览画面的中央<br/>
      * <br/>
-     * (经测试，此功能功能对少数机型无效，待优化)
+     * (经测试，调整对焦区域功能对极个别机型无效，即设置之后对焦区域依然位于预览画面的中央，原因不明)
      */
     public void setShouldAdjustFocusArea(boolean shouldAdjustFocusArea) {
         this.shouldAdjustFocusArea = shouldAdjustFocusArea;

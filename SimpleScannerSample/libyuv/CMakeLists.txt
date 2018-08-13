@@ -10,6 +10,7 @@ add_library( # 为library起名字
 
              # 需要编译的源代码文件目录
              ${native_srcs}
+             src/main/cpp/YuvJni.cpp
              )
 
 

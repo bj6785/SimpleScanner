@@ -1,1 +1,1 @@
-include ':app', ':simplescanner'
+include ':app', ':simplescanner', ':libyuv'
