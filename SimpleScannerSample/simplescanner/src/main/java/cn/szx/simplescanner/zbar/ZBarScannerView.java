@@ -196,7 +196,7 @@ public class ZBarScannerView extends BarcodeScannerView {
 
 //                Log.e(TAG, String.format("图像处理及识别耗时: %d ms", System.currentTimeMillis() - startTime));
                 try {
-                    TerminalManager.getInstance().beep(TerminalManager.BEEP_MODE_SUCCESS);
+                    TerminalManager.getInstance().beep(TerminalManager.BEEP_MODE_NORMAL);
                 } catch (SDKException e) {
                     e.printStackTrace();
                 }
